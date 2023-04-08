@@ -1,4 +1,4 @@
--- 2. část - SQL skript pro vytvoření objektů schématu databáze
+-- 3. část - SQL skript s dotazy SELECT
 -- Josef Kuchař (xkucha28), Matej Sirovatka (xsirov00)
 
 -- Projekt č.: 14
