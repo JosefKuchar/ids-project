@@ -1,4 +1,4 @@
--- 3. část - SQL skript s dotazy SELECT
+-- 4. část - SQL skript pro vytvoření pokročilých objektů schématu databáze
 -- Josef Kuchař (xkucha28), Matej Sirovatka (xsirov00)
 
 -- Projekt č.: 14
@@ -25,6 +25,8 @@ DROP TABLE "edit" CASCADE CONSTRAINTS;
 DROP TABLE "school_user" CASCADE CONSTRAINTS;
 
 DROP TABLE "faculty_user" CASCADE CONSTRAINTS;
+
+DROP MATERIALIZED VIEW "FACULTY_MESSAGE_COUNT";
 
 ----------------------------------------
 ------------ CREATE TABLES -------------
@@ -153,6 +155,32 @@ BEGIN
 END;
 /
 
+CREATE OR REPLACE PROCEDURE "longest_message" AS
+    "V_LONGEST_MESSAGE" "message"."text"%TYPE;
+    "V_LONGEST_MESSAGE_LENGTH" NUMBER;
+ -- Create cursor for messages
+    CURSOR "C_MESSAGES" IS
+        SELECT
+            "text"
+        FROM
+            "message";
+BEGIN
+    "V_LONGEST_MESSAGE_LENGTH" := 0;
+ -- Iterate through messages
+    FOR "V_MESSAGE" IN "C_MESSAGES" LOOP
+ -- If message is longer than the longest message, save it
+        IF LENGTH("V_MESSAGE"."text") > "V_LONGEST_MESSAGE_LENGTH" THEN
+            "V_LONGEST_MESSAGE" := "V_MESSAGE"."text";
+            "V_LONGEST_MESSAGE_LENGTH" := LENGTH("V_MESSAGE"."text");
+        END IF;
+    END LOOP;
+    DBMS_OUTPUT.PUT_LINE('Nejdelší zpráva: '
+        || "V_LONGEST_MESSAGE");
+    DBMS_OUTPUT.PUT_LINE('Délka nejdelší zprávy: '
+        || "V_LONGEST_MESSAGE_LENGTH");
+END;
+/
+
 ----------------------------------------
 --------- CREATE EXAMPLE DATA ----------
 ----------------------------------------
@@ -169,6 +197,12 @@ INSERT INTO "admin" (
     "permission_level"
 ) VALUES (
     2
+);
+
+INSERT INTO "admin" (
+    "permission_level"
+) VALUES (
+    1
 );
 
 -- Create schools
@@ -284,6 +318,20 @@ INSERT INTO "user" (
     2
 );
 
+INSERT INTO "user" (
+    "name",
+    "email",
+    "password",
+    "description",
+    "admin_id"
+) VALUES (
+    'Master admin 2',
+    'masteradmin2@example.com',
+    '$2a$12$HN1dNSiRgHwYMtQmCjyXCOdmYVJjSihPTjBjJJM1m.F2.A4IQ4POW',
+    'Vedlejší administrátor',
+    3
+);
+
 -- Create messages
 INSERT INTO "message" (
     "title",
@@ -360,6 +408,26 @@ INSERT INTO "edit" (
     1
 );
 
+INSERT INTO "edit" (
+    "changes",
+    "message_id",
+    "admin_id"
+) VALUES (
+    'Odstraněna typografická chyba 2.',
+    2,
+    1
+);
+
+INSERT INTO "edit" (
+    "changes",
+    "message_id",
+    "admin_id"
+) VALUES (
+    'Odstraněna typografická chyba.',
+    2,
+    2
+);
+
 -- Create follow bondings
 INSERT INTO "school_user" (
     "school_id",
@@ -402,6 +470,30 @@ BEGIN
 END;
 /
 
+BEGIN
+    "longest_message";
+END;
+/
+
+-- (3, 4) Indexes
+EXPLAIN PLAN FOR SELECT "school"."name", COUNT(*) AS "message_count" FROM "school" LEFT JOIN "message" ON "school"."id" = "message"."school_id" GROUP BY "school"."name";
+
+SELECT
+    *
+FROM
+    TABLE(DBMS_XPLAN.DISPLAY);
+
+CREATE INDEX "message_school_idx" ON "message" (
+    "school_id"
+);
+
+EXPLAIN PLAN FOR SELECT "school"."name", COUNT(*) AS "message_count" FROM "school" LEFT JOIN "message" ON "school"."id" = "message"."school_id" GROUP BY "school"."name";
+
+SELECT
+    *
+FROM
+    TABLE(DBMS_XPLAN.DISPLAY);
+
 -- (5) Grant priviliges
 GRANT ALL ON "user" TO XSIROV00;
 
@@ -419,6 +511,88 @@ GRANT ALL ON "school_user" TO XSIROV00;
 
 GRANT ALL ON "faculty_user" TO XSIROV00;
 
--- TODO Grant procedures
+GRANT EXECUTE ON "avg_follow_count" TO XSIROV00;
+
+GRANT EXECUTE ON "longest_message" TO XSIROV00;
+
+-- (6) Materialized view
+CREATE MATERIALIZED VIEW "FACULTY_MESSAGE_COUNT" AS
+    SELECT
+        "faculty"."name",
+        COUNT(*) AS "message_count"
+    FROM
+        "faculty"
+        LEFT JOIN "message"
+        ON "faculty"."id" = "message"."faculty_id"
+    GROUP BY
+        "faculty"."name";
+
+SELECT
+    *
+FROM
+    "FACULTY_MESSAGE_COUNT";
+
+INSERT INTO "message" (
+    "title",
+    "text",
+    "valid_from",
+    "valid_to",
+    "school_id",
+    "faculty_id"
+) VALUES (
+    'Důležitá zpráva',
+    'Přednášky v E112 se ruší.',
+    TO_TIMESTAMP('2023-03-25 07:00:00', 'YYYY-MM-DD HH24:MI:SS'),
+    TO_TIMESTAMP('2023-03-25 10:00:00', 'YYYY-MM-DD HH24:MI:SS'),
+    NULL,
+    1
+);
+
+SELECT
+    *
+FROM
+    "FACULTY_MESSAGE_COUNT";
+
+EXECUTE DBMS_MVIEW.REFRESH('FACULTY_MESSAGE_COUNT');
+
+SELECT
+    *
+FROM
+    "FACULTY_MESSAGE_COUNT";
+
+-- Grant access to materialized view
+GRANT ALL ON "FACULTY_MESSAGE_COUNT" TO XSIROV00;
 
 -- (7) Complex select
+
+WITH "admin_edits" AS (
+    SELECT
+        "edit"."admin_id",
+        COUNT(*) AS "edit_count"
+    FROM
+        "edit"
+    GROUP BY
+        "edit"."admin_id"
+)
+SELECT
+    "user"."name",
+    CASE
+        WHEN "admin_edits"."edit_count" IS NULL THEN
+            0
+        ELSE
+            "admin_edits"."edit_count"
+    END      AS "edit_count",
+    CASE
+        WHEN "admin_edits"."edit_count" > 0 THEN
+            'Contributor'
+        ELSE
+            'Non-contributor'
+    END      AS "status"
+FROM
+    "admin"
+    LEFT JOIN "admin_edits"
+    ON "admin"."id" = "admin_edits"."admin_id"
+    LEFT JOIN "user"
+    ON "admin"."id" = "user"."admin_id"
+ORDER BY
+    "edit_count" DESC;
